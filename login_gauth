@@ -71,7 +71,7 @@ if __name__ == '__main__':
 
     if attempt in onetimes:
         onetimes.remove(attempt)
-        save_gauth_config(userinfo, key, config, onetimes)
+        #save_gauth_config(userinfo, key, config, onetimes)
         login(userinfo, ssh_orig_cmd, 'One-time code accepted.')
 
     window = config.get('WINDOW_SIZE', 3)
@@ -80,7 +80,7 @@ if __name__ == '__main__':
     except TypeError:
         window = 3
 
-    save_gauth_config(userinfo, key, config, onetimes)
+    #save_gauth_config(userinfo, key, config, onetimes)
     if googauth.verify_time_based(key, attempt, window) is not None:
         login(userinfo, ssh_orig_cmd, 'Code accepted.')
 
