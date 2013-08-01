@@ -44,7 +44,7 @@ def login(userinfo, ssh_orig_cmd, message=None):
         os.execvp(ssh_orig_cmd[0], ssh_orig_cmd)
 
     if message is not None:
-        sys.stderr.wtire('%s\n' % (message,))
+        sys.stderr.write('%s\n' % (message,))
     shellname = os.path.basename(userinfo.pw_shell)
     os.execv(userinfo.pw_shell, ['-%s' % (shellname,)])
 
