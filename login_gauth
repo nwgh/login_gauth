@@ -1,88 +1,117 @@
 #!/usr/bin/env python
 
-import googauth
+import json
 import os
 import pwd
 import shlex
+import shutil
 import sys
 
-def parse_gauth_config(userinfo):
-    configfile = os.path.join(userinfo.pw_dir, '.google_authenticator')
-    key = None
-    config = {}
-    onetimes = []
+import googauth
+import ipaddr
 
-    with file(configfile) as f:
-        for line in f:
-            if key is None:
-                key = line.strip()
-            elif line.startswith('"'):
-                bits = line.strip().split(' ', 2)
-                if len(bits) == 3:
-                    config[bits[1]] = bits[2]
-                elif len(bits) == 2:
-                    config[bits[1]] = True
-            else:
-                onetimes.append(line.strip())
+CONFIGFILENAME = '.gauth.json'
 
-    return key, config, onetimes
+def parse_gauth_config(configpath):
+    config = {'secret': None,
+              'window_size': 3,
+              'onetimes': [],
+              'whitelist_nets': [],
+              'whitelist_commands': []}
 
-def save_gauth_config(userinfo, key, config, onetimes):
-    configfile = os.path.join(userinfo.pw_dir, '.google_authenticator')
-    with file(configfile, 'w') as f:
-        f.write('%s\n' % (key,))
-        for k, v in config.iteritems():
-            f.write('" %s' % (k,))
-            if v != True:
-                f.write(' %s' % (v,))
-            f.write('\n')
-        for onetime in onetimes:
-            f.write('%s\n' % (onetime,))
+    configfile = os.path.join(configpath, CONFIGFILENAME)
+    try:
+        with file(configfile) as f:
+            config.update(json.load(f))
+    except:
+        pass
 
-def login(userinfo, ssh_orig_cmd, message=None):
+    return config
+
+def save_gauth_config(configpath, config):
+    configfile = os.path.join(configpath, CONFIGFILENAME)
+    writefile = '%s.new' % (configfile,)
+    with file(writefile, 'w') as f:
+        json.dump(config, f)
+    shutil.copy(writefile, configfile)
+    os.unlink(writefile)
+
+def client_is_whitelisted(whitelist, client):
+    whitelisted = False
+    try:
+        client_ip = ipaddr.IPAddress(client)
+    except:
+        client_ip = None
+
+    for item in whitelist:
+        try:
+            ip = ipaddr.IPAddress(item)
+            if client_ip == ip:
+                whitelisted = True
+        except:
+            try:
+                net = ipaddr.IPNetwork(item)
+                if client_ip in net:
+                    whitelisted = True
+            except:
+                pass
+
+    return whitelisted
+
+def login(shell, ssh_orig_cmd, message=None):
     if ssh_orig_cmd is not None:
         os.execvp(ssh_orig_cmd[0], ssh_orig_cmd)
 
     if message is not None:
         sys.stderr.write('%s\n' % (message,))
-    shellname = os.path.basename(userinfo.pw_shell)
-    os.execv(userinfo.pw_shell, ['-%s' % (shellname,)])
+    shellname = os.path.basename(shell)
+    os.execv(shell, ['-%s' % (shellname,)])
 
-if __name__ == '__main__':
+def do_gauth():
     ssh_orig_cmd = os.getenv('SSH_ORIGINAL_COMMAND')
     if ssh_orig_cmd is not None:
         ssh_orig_cmd = shlex.split(ssh_orig_cmd)
     user = os.getenv('USER')
     userinfo = pwd.getpwnam(user)
+    shell = userinfo.pw_shell
+    configdir = os.getenv('LOGIN_GAUTH_TEST_DIR')
+    if configdir is None:
+        configdir = userinfo.pw_dir
 
-    try:
-        key, config, onetimes = parse_gauth_config(userinfo)
-    except:
-        key, config, onetimes = None, None, None
+    config = parse_gauth_config(configdir)
 
-    if not key:
+    if not config['secret']:
         # Fail-safe
-        login(userinfo, ssh_orig_cmd)
+        login(shell, ssh_orig_cmd)
+
+    if ssh_orig_cmd is not None:
+        if ssh_orig_cmd[0] in config['whitelist_commands']:
+            # We've been whitelisted!
+            login(shell, ssh_orig_cmd)
+
+    ssh_client = os.getenv('SSH_CLIENT')
+    if ssh_client is not None:
+        ssh_client = ssh_client.split()[0]
+        if client_is_whitelisted(config['whitelist_nets'], ssh_client):
+            # We've been whitelisted!
+            login(shell, ssh_orig_cmd)
 
     try:
         attempt = raw_input('Enter auth code: ')
     except EOFError:
-        sys.exit(1)
+        return 1
 
-    if attempt in onetimes:
-        onetimes.remove(attempt)
-        #save_gauth_config(userinfo, key, config, onetimes)
-        login(userinfo, ssh_orig_cmd, 'One-time code accepted.')
+    if attempt in config['onetimes']:
+        config['onetimes'].remove(attempt)
+        save_gauth_config(configdir, config)
+        login(shell, ssh_orig_cmd, 'One-time code accepted.')
 
-    window = config.get('WINDOW_SIZE', 3)
-    try:
-        window = int(window)
-    except TypeError:
-        window = 3
-
-    #save_gauth_config(userinfo, key, config, onetimes)
-    if googauth.verify_time_based(key, attempt, window) is not None:
-        login(userinfo, ssh_orig_cmd, 'Code accepted.')
+    if googauth.verify_time_based(config['secret'], attempt,
+                                  config['window_size']) is not None:
+        login(shell, ssh_orig_cmd, 'Code accepted.')
 
     sys.stderr.write('Invalid code.\n')
-    sys.exit(1)
+    return 1
+
+if __name__ == '__main__':
+    sys.exit(do_gauth())
